@@ -5,12 +5,19 @@ import socket from '@/lib/socket';
 import { useAuth } from '@clerk/nextjs';
 import { ImagePlusIcon, Mic, Pause } from 'lucide-react';
 import Image from 'next/image';
+import { getAllRooms } from '@/lib/api/room';
+import { getRoomMessages } from '@/lib/api/message';
 
 export type Message = {
     roomId: string;
     sender: string;
     content: string;
     type: 'audio' | 'text' | 'image' | 'alert';
+}
+
+export type Room = {
+    id: string,
+    name: string,
 }
 
 export default function Chat() {
@@ -20,10 +27,9 @@ export default function Chat() {
     const mediaRecorder = useRef<MediaRecorder | null>(null);
     const audioChunks = useRef<Blob[]>([]);
     const [isRecording, setIsRecording] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
 
-    const [rooms, setRooms] = useState<string[]>(
-        ['room-1', 'room-2']
-    )
+    const [rooms, setRooms] = useState<Room[]>([])
     const [currRoom, setCurrRoom] = useState<string>('')
 
     const [value, setValue] = useState('')
@@ -32,6 +38,16 @@ export default function Chat() {
     const { userId, isLoaded, isSignedIn } = useAuth();
 
     useEffect(() => {
+        const fetchRooms = async () => {
+            try {
+                const rooms = await getAllRooms();
+                setRooms(rooms);
+            } catch (error) {
+                console.error('Error fetching rooms:', error);
+            }
+        };
+        fetchRooms();
+
         socket.on('connect', () => {
             console.log('Connected:', socket.id);
         });
@@ -54,6 +70,7 @@ export default function Chat() {
         socket.on('upload-success', (data) => {
             console.log('file upload successfully', data)
             setMessages(prev => [...prev, data])
+            setIsUploading(false);
         });
 
         return () => {
@@ -62,12 +79,27 @@ export default function Chat() {
             socket.off('user-joined');
             socket.off('room-message');
             socket.off('upload-success');
+            setCurrRoom('')
         };
     }, []);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
+
+    useEffect(() => {
+        if (!currRoom) return
+
+        const fetchRoomMessages = async () => {
+            try {
+                const roomMessages = await getRoomMessages(currRoom);
+                setMessages(roomMessages);
+            } catch (error) {
+                console.error('Error fetching room message:', error);
+            }
+        };
+        fetchRoomMessages();
+    }, [currRoom]);
 
     const onsubmit = () => {
         console.log(value)
@@ -81,12 +113,12 @@ export default function Chat() {
         setValue('')
     }
 
-    const joinRoom = (room: string) => {
-        setCurrRoom(room)
+    const joinRoom = (roomId: string) => {
+        setCurrRoom(roomId)
 
         socket.emit('join-room', {
             sender: userId,
-            roomId: room
+            roomId
         })
     }
 
@@ -99,20 +131,25 @@ export default function Chat() {
             return;
         }
 
+        setIsUploading(true);
+
         const reader = new FileReader();
         reader.onload = () => {
-            socket.emit('upload-file', {
-                roomId: currRoom,
-                sender: userId,
-                name: file.name,
-                type: file.type,
-                content: reader.result, // base64
-            });
+            if (reader.result) {
+                const base64 = reader.result.toString().split(',')[1];
+                socket.emit('upload-file', {
+                    roomId: currRoom,
+                    sender: userId,
+                    name: file.name,
+                    type: file.type,
+                    content: base64,
+                });
+            }
         };
         reader.readAsDataURL(file);
 
         if (inputRef.current) {
-            inputRef.current = null;
+            inputRef.current.value = "";
         }
     };
 
@@ -127,6 +164,7 @@ export default function Chat() {
         };
 
         recorder.onstop = async () => {
+            setIsUploading(true);
             const blob = new Blob(audioChunks.current, { type: 'audio/webm' });
             const base64 = await blobToBase64(blob);
 
@@ -134,7 +172,7 @@ export default function Chat() {
                 roomId: currRoom,
                 sender: userId,
                 type: 'audio',
-                content: `data:audio/webm;base64,${base64}`,
+                content: base64,
             });
 
             audioChunks.current = [];
@@ -169,17 +207,38 @@ export default function Chat() {
         return <div className='w-screen h-screen flex justify-center items-center'>Sign in to chat</div>;
     }
 
+    console.log({ isUploading })
+
     return <div className='flex w-screen'>
+        {isUploading && <div className='flex justify-center items-center bg-black/40 z-50 fixed top-0 bottom-0 right-0 left-0'>
+            <Image
+                src={'/loading.gif'}
+                alt='loading'
+                width={100}
+                height={100}
+            />
+        </div>}
+
+        {isRecording && <div className='flex justify-center items-center bg-black/40 z-50 fixed top-0 bottom-24 right-0 left-0'>
+            <Image
+                src={'/recording.gif'}
+                alt='loading'
+                className='rounded-md'
+                width={500}
+                height={500}
+            />
+        </div>}
+
         <div className='w-2/12 bg-blue-200 px-2'>
             {rooms && rooms.length <= 0
                 ? <p className='text-black flex justify-center py-1'>No message</p>
                 : rooms.map(room =>
                     <div
-                        key={room}
-                        className={`py-2 px-4 my-1 text-black border rounded-md opacity-90 hover:bg-black/40 hover:text-white hover:cursor-pointer bg-amber-50 ${room === currRoom ? 'bg-blue-500' : ''}`}
-                        onClick={() => joinRoom(room)}
+                        key={room.id}
+                        className={`py-2 px-4 my-1 text-black border rounded-md opacity-90 hover:bg-black/40 hover:text-white hover:cursor-pointer bg-amber-50 ${room.id === currRoom ? 'bg-blue-500' : ''}`}
+                        onClick={() => joinRoom(room.id)}
                     >
-                        {room}
+                        {room.name}
                     </div>
                 )}
         </div>
