@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import socket from '@/lib/socket';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth, useUser } from '@clerk/nextjs';
 import { ImagePlusIcon, Mic, Pause } from 'lucide-react';
 import Image from 'next/image';
 import { getAllRooms } from '@/lib/api/room';
@@ -17,7 +17,14 @@ export type Message = {
 
 export type Room = {
     id: string,
+    room_id: string;
     name: string,
+}
+
+export type User = {
+    userId: string,
+    name: string,
+    avatar: string,
 }
 
 export default function Chat() {
@@ -29,6 +36,7 @@ export default function Chat() {
     const [isRecording, setIsRecording] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
 
+    const [users, setUsers] = useState<User[]>([])
     const [rooms, setRooms] = useState<Room[]>([])
     const [currRoom, setCurrRoom] = useState<string>('')
 
@@ -36,12 +44,13 @@ export default function Chat() {
     const [messages, setMessages] = useState<Message[]>([])
 
     const { userId, isLoaded, isSignedIn } = useAuth();
+    const { user } = useUser();
 
     useEffect(() => {
         const fetchRooms = async () => {
             try {
                 const rooms = await getAllRooms();
-                setRooms(rooms);
+                setRooms(rooms.filter(r => r.room_id === r.id));
             } catch (error) {
                 console.error('Error fetching rooms:', error);
             }
@@ -50,6 +59,17 @@ export default function Chat() {
 
         socket.on('connect', () => {
             console.log('Connected:', socket.id);
+        });
+
+        socket.emit('join', {
+            userId,
+            avatar: user?.imageUrl,
+            name: user?.fullName,
+        });
+
+        socket.on('online-users', (data) => {
+            console.log('Users online:', data);
+            setUsers(data.filter(u => u.userId !== userId))
         });
 
         socket.on('message', (data) => {
@@ -79,9 +99,10 @@ export default function Chat() {
             socket.off('user-joined');
             socket.off('room-message');
             socket.off('upload-success');
+            socket.off('online-users');
             setCurrRoom('')
         };
-    }, []);
+    }, [user]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -89,6 +110,7 @@ export default function Chat() {
 
     useEffect(() => {
         if (!currRoom) return
+        setMessages([])
 
         const fetchRoomMessages = async () => {
             try {
@@ -207,8 +229,6 @@ export default function Chat() {
         return <div className='w-screen h-screen flex justify-center items-center'>Sign in to chat</div>;
     }
 
-    console.log({ isUploading })
-
     return <div className='flex w-screen'>
         {isUploading && <div className='flex justify-center items-center bg-black/40 z-50 fixed top-0 bottom-0 right-0 left-0'>
             <Image
@@ -235,12 +255,23 @@ export default function Chat() {
                 : rooms.map(room =>
                     <div
                         key={room.id}
-                        className={`py-2 px-4 my-1 text-black border rounded-md opacity-90 hover:bg-black/40 hover:text-white hover:cursor-pointer bg-amber-50 ${room.id === currRoom ? 'bg-blue-500' : ''}`}
+                        className={`py-2 px-4 my-1 text-black border rounded-md opacity-90 hover:bg-black/40 hover:text-white hover:cursor-pointer bg-amber-50 ${room.room_id === currRoom ? 'bg-blue-500' : ''}`}
                         onClick={() => joinRoom(room.id)}
                     >
                         {room.name}
                     </div>
                 )}
+
+            {users && users.length > 0 && users.map((user) =>
+                <div
+                    key={user?.userId}
+                    className={`py-2 px-4 my-1 text-black border rounded-md opacity-90 hover:bg-black/40 hover:text-white hover:cursor-pointer bg-amber-50 ${[userId, user.userId].sort().join('-') === currRoom ? 'bg-blue-500' : ''}`}
+                    onClick={() => joinRoom([userId, user.userId].sort().join('-'))}
+                >
+                    <Image src={user?.avatar} className='rounded-full' width={25} height={25} alt='user avatar' />
+                    <p className='w-full truncate'>{user.name}</p>
+                </div>
+            )}
         </div>
 
         <div className='w-10/12 flex gap-2'>

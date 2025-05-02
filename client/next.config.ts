@@ -2,9 +2,14 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
    images: {
-    remotePatterns: [{
+    remotePatterns: [
+      {
       hostname: 'kdagrndfeayvsbhwhbsc.supabase.co',
-    }],
+    },
+    {
+      hostname: 'img.clerk.com'
+    }
+  ],
   },
 };
 
