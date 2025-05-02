@@ -21,6 +21,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
+  connectedUsers = new Map<string, object>();
+
   constructor(
     @Inject('SUPABASE_CLIENT')
     private readonly supabase: SupabaseClient,
@@ -32,6 +34,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   handleDisconnect(client: Socket) {
     console.log(`Client disconnected: ${client.id}`);
+
+    this.connectedUsers.delete(client.id);
+    console.log('connectedUsers', Array.from(this.connectedUsers));
+    this.server.emit('online-users', Array.from(this.connectedUsers.values()));
   }
 
   @SubscribeMessage('message')
@@ -39,18 +45,52 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.emit('message', data);
   }
 
+  @SubscribeMessage('join')
+  handleJoin(
+    @MessageBody()
+    data: {
+      userId: string;
+      avatar: string;
+      name: string;
+    },
+    @ConnectedSocket() client: Socket,
+  ) {
+    this.connectedUsers.set(client.id, data);
+    console.log({ connectedUsers: Array.from(this.connectedUsers) });
+    this.server.emit('online-users', Array.from(this.connectedUsers.values()));
+  }
+
   @SubscribeMessage('join-room')
   async handleJoinRoom(
     @MessageBody() data: { roomId: string; sender: string },
     @ConnectedSocket() client: Socket,
   ) {
+    const { data: existingRoom } = await this.supabase
+      .from('rooms')
+      .select('*')
+      .eq('room_id', data.roomId)
+      .single();
+
+    if (!existingRoom) {
+      await this.supabase
+        .from('rooms')
+        .insert({
+          name: '',
+          room_id: data.roomId,
+        })
+        .select()
+        .single();
+    }
+
     client.join(data.roomId);
+
     await this.supabase.from('messages').insert({
       sender: data.sender,
       content: data.sender + ' joined room',
       type: 'alert',
       room_id: data.roomId,
     });
+
     this.server.to(data.roomId).emit('user-joined', {
       ...data,
       type: 'alert',
